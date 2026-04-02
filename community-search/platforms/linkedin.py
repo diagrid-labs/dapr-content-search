@@ -184,6 +184,7 @@ async def scrape_linkedin(
         # Extract data from each result
         items = page.locator(result_selector)
         count = await items.count()
+
         for i in range(count):
             item = items.nth(i)
             try:
@@ -245,14 +246,21 @@ async def scrape_linkedin(
                     if (shareMatch) {
                         postUrl = 'https://www.linkedin.com/feed/update/urn:li:share:' + shareMatch[1];
                     }
-                    // Strategy 2: activity link
+                    // Strategy 2: ugcPost URN from userGeneratedContentId
+                    if (!postUrl) {
+                        const ugcMatch = el.innerHTML.match(/userGeneratedContentId=(\d+)/);
+                        if (ugcMatch) {
+                            postUrl = 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + ugcMatch[1];
+                        }
+                    }
+                    // Strategy 3: activity link
                     if (!postUrl) {
                         const activityMatch = el.innerHTML.match(/activity[/:](\d{15,})/);
                         if (activityMatch) {
                             postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityMatch[1];
                         }
                     }
-                    // Strategy 3: data-urn attribute
+                    // Strategy 4: data-urn attribute
                     if (!postUrl) {
                         const urnEl = el.querySelector('[data-urn]');
                         if (urnEl) {

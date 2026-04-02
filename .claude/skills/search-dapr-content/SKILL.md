@@ -93,7 +93,7 @@ cd community-search && uv run python search.py --auth linkedin
 
    The final format for each post should be (where Type is one of `Post`, `Post with link`, `Article share`, or `Reply post`):
    ```
-   ## YYYY-MM-DD — [Type]
+   ## YYYY-MM-DD — [Author] — [Type]
 
    ### Platform
 
@@ -120,19 +120,21 @@ cd community-search && uv run python search.py --auth linkedin
    [high|medium|low]
    ```
 
+   Including the author name in the `##` heading ensures each heading is unique, which makes GFM anchor links reliable without needing duplicate-suffix logic (`-1`, `-2`, etc.).
+
 7. **Reorder posts by relevancy**: Sort all posts by their Relevancy Score in descending order (high first, then medium, then low). Within the same relevancy, keep the original date-descending order. Rewrite the markdown file with the reordered posts, preserving the `# Dapr Community Content` header and horizontal rule separators between posts.
 
 8. **Add a summary table**: After reordering, insert a summary table immediately after the `# Dapr Community Content — ...` heading and before the first post. The table provides a quick overview of all posts with internal links to jump to the full content.
 
-   For each post, generate a GitHub-flavored Markdown anchor from the `## YYYY-MM-DD — [Type]` heading. The anchor is created by lowercasing, replacing spaces with `-`, and removing special characters (e.g., `## 2026-03-31 — Post with link` → `#2026-03-31--post-with-link`). If there are duplicate headings, append `-1`, `-2`, etc. to subsequent duplicates (matching GFM behavior).
+   For each post, generate a GitHub-flavored Markdown anchor from the `## YYYY-MM-DD — [Author] — [Type]` heading. The anchor is created by lowercasing, replacing spaces with `-`, and removing special characters (e.g., `## 2026-03-31 — Jane Doe — Post with link` → `#2026-03-31--jane-doe--post-with-link`). Since headings now include the author name, each anchor should be unique without needing duplicate suffixes.
 
    The table format:
 
    ```
    | # | Platform | Author | Summary | Sentiment | Relevancy Score | Link |
    |---|----------|--------|---------|-----------|-----------------|------|
-   | 1 | bluesky | Author Name | One sentence summary of the post content | positive | high | [View](#2026-03-31--post-with-link) |
-   | 2 | x | Author Name | One sentence summary of the post content | neutral | medium | [View](#2026-03-30--reply-post) |
+   | 1 | bluesky | Jane Doe | One sentence summary of the post content | positive | high | [View](#2026-03-31--jane-doe--post-with-link) |
+   | 2 | x | John Smith | One sentence summary of the post content | neutral | medium | [View](#2026-03-30--john-smith--reply-post) |
    ```
 
    Rules for the table:
