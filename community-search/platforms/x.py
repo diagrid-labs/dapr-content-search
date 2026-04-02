@@ -100,35 +100,24 @@ async def scrape_x(
                 text_el = article.locator('[data-testid="tweetText"]').first
                 if await text_el.count():
                     text = await text_el.evaluate("""el => {
-                        let result = '';
-                        for (const node of el.childNodes) {
-                            if (node.nodeType === 3) {
-                                result += node.textContent;
-                            } else if (node.tagName === 'A') {
-                                result += node.getAttribute('title') || node.getAttribute('href') || node.textContent;
-                            } else if (node.tagName === 'IMG') {
-                                result += node.getAttribute('alt') || '';
-                            } else {
-                                // Recurse into spans and other containers
-                                const links = node.querySelectorAll('a');
-                                if (links.length > 0) {
-                                    let inner = '';
-                                    for (const child of node.childNodes) {
-                                        if (child.nodeType === 3) {
-                                            inner += child.textContent;
-                                        } else if (child.tagName === 'A') {
-                                            inner += child.getAttribute('title') || child.getAttribute('href') || child.textContent;
-                                        } else {
-                                            inner += child.textContent || '';
-                                        }
-                                    }
-                                    result += inner;
+                        function resolveNode(el) {
+                            let result = '';
+                            for (const node of el.childNodes) {
+                                if (node.nodeType === 3) {
+                                    result += node.textContent;
+                                } else if (node.tagName === 'BR') {
+                                    result += '\\n';
+                                } else if (node.tagName === 'A') {
+                                    result += node.getAttribute('title') || node.getAttribute('href') || node.textContent;
+                                } else if (node.tagName === 'IMG') {
+                                    result += node.getAttribute('alt') || '';
                                 } else {
-                                    result += node.textContent || '';
+                                    result += resolveNode(node);
                                 }
                             }
+                            return result;
                         }
-                        return result;
+                        return resolveNode(el);
                     }""")
                 else:
                     text = ""

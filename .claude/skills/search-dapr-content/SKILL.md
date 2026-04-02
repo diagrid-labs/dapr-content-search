@@ -8,7 +8,7 @@ user-invocable: true
 
 Search social media platforms (X, LinkedIn, Bluesky) for Dapr-related community content. The app searches for keywords defined in `community-search/config.py` (e.g., `Dapr`, `Dapr Workflow`, `Dapr Agents`).
 
-**False positive filtering**: The scrapers automatically reject posts where "dapr" only appears as a substring inside another word (e.g., the French word "d'après"). The `has_dapr_keyword()` function in `platforms/__init__.py` enforces that "dapr" must appear as a standalone keyword, not surrounded by letters or apostrophes.
+**False positive filtering**: The scrapers automatically reject posts where "dapr" only appears as a substring inside another word (e.g., the French word "d'apr&egrave;s"). The `has_dapr_keyword()` function in `platforms/__init__.py` enforces that "dapr" must appear as a standalone keyword, not surrounded by letters or apostrophes.
 
 ## How to Use
 
@@ -73,8 +73,9 @@ cd community-search && uv run python search.py --auth linkedin
    ```
 
 5. **Check the output**:
-   - If the script reports results written to a file, read that file and present a summary to the user (number of posts found, platforms covered, date range).
-   - Note: results are **appended** to the output file. Running the same search twice will produce duplicates.
+   - The script writes two files: a Markdown file and a **JSON file** (same name, `.json` extension). The JSON file contains the structured results for enrichment.
+   - If the script reports results written to a file, note the JSON file path for the next step.
+   - Note: Markdown results are **appended** to the output file. Running the same search twice will produce duplicates. The JSON file is overwritten each time.
    - If a platform fails with a `FileNotFoundError` about missing auth state, inform the user they need to authenticate first by running the commands themselves (use `!` prefix):
      ```
      ! cd community-search && uv run python search.py --auth x
@@ -83,67 +84,87 @@ cd community-search && uv run python search.py --auth linkedin
    - If a platform logs a warning about being redirected to `/login`, the session has expired. The user needs to re-authenticate using the auth commands above.
    - If no results are found, inform the user.
 
-6. **Analyze and enrich each post**: After the markdown file is written, read it and process every post. For each post, add two new subsections (after the `### URL` section):
+6. **Enrich posts via JSON** — read the JSON file and determine the enrichment strategy based on result count:
 
-   - **`### Sentiment`**: Analyze the post text and assign one of: `positive`, `neutral`, or `negative`.
-   - **`### Relevancy Score`**: Assess how relevant the post is to Dapr and assign one of these values:
-     - **high**: The post is clearly about **Dapr** (the distributed application runtime) or **Dapr Agents** (the Python library for building agentic AI applications).
-     - **medium**: The post is somewhat relevant to Dapr (mentions Dapr in passing, discusses related distributed systems topics alongside Dapr, or is tangentially connected).
-     - **low**: The post is not relevant to Dapr at all (e.g., uses "dapr" as slang, is about a different topic entirely, or matched the search keywords by accident).
+   **For 15 or fewer posts** (small set): Enrich directly in the main conversation.
+   - Read the JSON file.
+   - For each post, determine `sentiment` and `relevancy_score` (see Enrichment Rules below).
+   - Add a `summary` field (one concise sentence, under 100 characters).
+   - Write the enriched JSON back to the same file.
 
-   The final format for each post should be (where Type is one of `Post`, `Post with link`, `Article share`, or `Reply post`):
+   **For more than 15 posts** (large set): Use **batched parallel enrichment with subagents**.
+   - Read the JSON file to get the total post count.
+   - Split posts into batches of up to 15 posts each.
+   - For each batch, write a temporary JSON file: `reports/<base>_batch_N.json`
+   - Launch one **Agent** subagent per batch **in parallel** (use a single message with multiple Agent tool calls). Each subagent prompt should be:
+
+     ```
+     Read the JSON file at <batch_file_path>. For each post in the array, fill in three fields:
+     - "sentiment": one of "positive", "neutral", or "negative" based on the post text tone.
+     - "relevancy_score": one of "high", "medium", or "low":
+       - high: clearly about Dapr (distributed application runtime) or Dapr Agents (Python library for agentic AI).
+       - medium: mentions Dapr in passing or discusses related distributed systems topics alongside Dapr.
+       - low: not relevant to Dapr (slang, different topic, accidental keyword match).
+     - "summary": one concise sentence summarizing the post (under 100 characters).
+     Write the enriched array back to the same file path. Do not change any other fields.
+     ```
+
+   - After all subagents complete, read and merge all batch files into one array, preserving original order.
+   - Write the merged enriched JSON back to the original JSON file path.
+   - Delete the temporary batch files.
+
+7. **Render the final report** using `render.py`:
    ```
-   ## YYYY-MM-DD — [Author] — [Type]
-
-   ### Platform
-
-   [x|linkedin|bluesky]
-
-   ### Author
-
-   [author]
-
-   ### Post
-
-   [text]
-
-   ### URL
-
-   [url]
-
-   ### Sentiment
-
-   [positive|neutral|negative]
-
-   ### Relevancy Score
-
-   [high|medium|low]
+   cd community-search && uv run python render.py <json_file_path> --output <markdown_file_path> --since YYYY-MM-DD --until YYYY-MM-DD
    ```
+   This script handles all mechanical post-processing:
+   - Reorders posts by relevancy score (high first, then medium, then low; date descending within each tier)
+   - Generates the summary table with internal anchor links
+   - Writes the final Markdown file
 
-   Including the author name in the `##` heading ensures each heading is unique, which makes GFM anchor links reliable without needing duplicate-suffix logic (`-1`, `-2`, etc.).
+8. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics, relevancy score distribution).
 
-7. **Reorder posts by relevancy**: Sort all posts by their Relevancy Score in descending order (high first, then medium, then low). Within the same relevancy, keep the original date-descending order. Rewrite the markdown file with the reordered posts, preserving the `# Dapr Community Content` header and horizontal rule separators between posts.
+## Enrichment Rules
 
-8. **Add a summary table**: After reordering, insert a summary table immediately after the `# Dapr Community Content — ...` heading and before the first post. The table provides a quick overview of all posts with internal links to jump to the full content.
+For each post, assign:
 
-   For each post, generate a GitHub-flavored Markdown anchor from the `## YYYY-MM-DD — [Author] — [Type]` heading. The anchor is created by lowercasing, replacing spaces with `-`, and removing special characters (e.g., `## 2026-03-31 — Jane Doe — Post with link` → `#2026-03-31--jane-doe--post-with-link`). Since headings now include the author name, each anchor should be unique without needing duplicate suffixes.
+- **`sentiment`**: Analyze the post text and assign one of: `positive`, `neutral`, or `negative`.
+- **`relevancy_score`**: Assess how relevant the post is to Dapr:
+  - **high**: The post is clearly about **Dapr** (the distributed application runtime) or **Dapr Agents** (the Python library for building agentic AI applications).
+  - **medium**: The post is somewhat relevant to Dapr (mentions Dapr in passing, discusses related distributed systems topics alongside Dapr, or is tangentially connected).
+  - **low**: The post is not relevant to Dapr at all (e.g., uses "dapr" as slang, is about a different topic entirely, or matched the search keywords by accident).
+- **`summary`**: A single concise sentence summarizing the post content (under 100 characters).
 
-   The table format:
+## Post Format Reference
 
-   ```
-   | # | Platform | Author | Summary | Sentiment | Relevancy Score | Link |
-   |---|----------|--------|---------|-----------|-----------------|------|
-   | 1 | bluesky | Jane Doe | One sentence summary of the post content | positive | high | [View](#2026-03-31--jane-doe--post-with-link) |
-   | 2 | x | John Smith | One sentence summary of the post content | neutral | medium | [View](#2026-03-30--john-smith--reply-post) |
-   ```
+The final Markdown format for each post (produced by `render.py`) is:
 
-   Rules for the table:
-   - **#**: Sequential number starting at 1.
-   - **Platform**: The platform name as it appears in the post's `### Platform` section (`x`, `linkedin`, or `bluesky`).
-   - **Author**: The author name (without the handle/platform identifier in parentheses).
-   - **Summary**: A single concise sentence summarizing what the post is about. Keep it under 100 characters.
-   - **Sentiment**: The sentiment value already assigned to the post.
-   - **Relevancy Score**: The relevancy score value already assigned to the post (`high`, `medium`, or `low`).
-   - **Link**: An internal markdown link `[View](#anchor)` pointing to the post's heading anchor.
+```
+## YYYY-MM-DD — [Author] — [Type]
 
-9. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics, relevancy score distribution).
+### Platform
+
+[x|linkedin|bluesky]
+
+### Author
+
+[author]
+
+### Post
+
+[text]
+
+### URL
+
+[url]
+
+### Sentiment
+
+[positive|neutral|negative]
+
+### Relevancy Score
+
+[high|medium|low]
+```
+
+Including the author name in the `##` heading ensures each heading is unique, which makes GFM anchor links reliable without needing duplicate-suffix logic (`-1`, `-2`, etc.).

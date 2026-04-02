@@ -254,11 +254,16 @@ async def _capture_html(
             logger.info("No results found for keyword %r on LinkedIn (sort=%s)", keyword, sort_by)
             return None, []
 
-        # Scroll loop to load more results
+        # Scroll loop to load more results.
+        # LinkedIn renders results inside a scrollable container, so
+        # scrolling document.body alone may not trigger infinite-scroll.
+        # We scroll the last result item into view, which works regardless
+        # of which ancestor element is the actual scroll container.
         stale_scrolls = 0
         max_stale = 3
         for attempt in range(config.LINKEDIN_MAX_SCROLL_ATTEMPTS):
             count_before = await page.locator(result_selector).count()
+            await page.locator(result_selector).last.scroll_into_view_if_needed()
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await page.wait_for_timeout(int(config.LINKEDIN_SCROLL_PAUSE_SECONDS * 1000))
             count_after = await page.locator(result_selector).count()
@@ -305,6 +310,8 @@ def _resolve_text_node(element) -> str:
     for child in element.children:
         if isinstance(child, NavigableString):
             result += str(child)
+        elif child.name == "br":
+            result += "\n"
         elif child.name == "img":
             alt = child.get("alt", "")
             if alt:
@@ -441,14 +448,13 @@ async def run_linkedin(since: date, until: date) -> list[dict]:
 
     async with async_playwright() as pw:
         for keyword in config.SEARCH_KEYWORDS:
-            for sort_by in ("", "date_posted"):
-                posts = await scrape_linkedin(keyword, since, until, pw, sort_by=sort_by)
-                for post in posts:
-                    # Deduplicate by URL if available, otherwise by author+text hash
-                    dedup_key = post["url"] if post["url"] else f"{post['author']}:{post['text'][:200]}"
-                    if dedup_key not in seen_keys:
-                        seen_keys.add(dedup_key)
-                        all_results.append(post)
+            posts = await scrape_linkedin(keyword, since, until, pw, sort_by="")
+            for post in posts:
+                # Deduplicate by URL if available, otherwise by author+text hash
+                dedup_key = post["url"] if post["url"] else f"{post['author']}:{post['text'][:200]}"
+                if dedup_key not in seen_keys:
+                    seen_keys.add(dedup_key)
+                    all_results.append(post)
 
     logger.info("LinkedIn: %d unique results across all keywords", len(all_results))
     return all_results

@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -220,7 +221,7 @@ async def main() -> None:
         print("No results found.")
         return
 
-    # Render table
+    # Render markdown
     table_str = render_results(deduped)
 
     # Determine output file path (default: reports/ in repo root)
@@ -231,9 +232,29 @@ async def main() -> None:
         os.makedirs(reports_dir, exist_ok=True)
         output_path = os.path.join(reports_dir, f"{date.today().isoformat()}-community-content.md")
 
-    # Write to file
+    # Write markdown file
     append_to_file(output_path, since, until, table_str)
+
+    # Write JSON file alongside markdown for downstream enrichment
+    json_path = os.path.splitext(output_path)[0] + ".json"
+    json_results = []
+    for r in deduped:
+        json_results.append({
+            "date": r["date"],
+            "author": r["author"],
+            "text": r["text"],
+            "url": r["url"],
+            "quoted_url": r.get("quoted_url", ""),
+            "type": r["type"],
+            "platform": r["platform"],
+            "sentiment": "",
+            "relevancy_score": "",
+        })
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_results, f, indent=2, ensure_ascii=False)
+
     print(f"Results written to {output_path} ({len(deduped)} posts)")
+    print(f"JSON written to {json_path}")
 
 
 if __name__ == "__main__":
