@@ -1,17 +1,22 @@
-"""LinkedIn scraper using Playwright."""
+"""LinkedIn scraper: Playwright for rendering, BeautifulSoup for parsing."""
 
+import json
 import logging
 import os
 import re
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta
 from urllib.parse import quote
 
+from bs4 import BeautifulSoup, NavigableString
 from playwright.async_api import Playwright, async_playwright
 
 import config
 from platforms import has_dapr_keyword, is_nsfw, only_dapr_in_youtube_id
 
 logger = logging.getLogger(__name__)
+
+# Directory for temporary HTML captures (inside community-search/)
+TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tmp")
 
 
 def parse_relative_time(text: str) -> str:
@@ -82,31 +87,26 @@ async def _find_result_selector(page) -> str | None:
 async def _copy_post_link(item, page) -> str:
     """Click the overflow menu on a post and use 'Copy link to post' to get the URL."""
     try:
-        # Find and click the overflow menu button (three dots)
         overflow_btn = item.locator('button[aria-label^="Open control menu"]')
         if await overflow_btn.count() == 0:
             return ""
         await overflow_btn.first.click()
         await page.wait_for_timeout(1000)
 
-        # Find and click the "Copy link to post" menu item
         copy_link_item = page.locator('div[role="menuitem"]').filter(has_text="Copy link to post")
         if await copy_link_item.count() == 0:
-            # Close the menu by pressing Escape
             await page.keyboard.press("Escape")
             await page.wait_for_timeout(500)
             return ""
         await copy_link_item.first.click()
         await page.wait_for_timeout(500)
 
-        # Read the URL from the clipboard
         url = await page.evaluate("navigator.clipboard.readText()")
         if url and "linkedin.com" in url:
             logger.debug("Copied post link: %s", url)
             return url.strip()
     except Exception as exc:
         logger.debug("Failed to copy post link: %s", exc)
-        # Try to close any open menu
         try:
             await page.keyboard.press("Escape")
         except Exception:
@@ -114,10 +114,100 @@ async def _copy_post_link(item, page) -> str:
     return ""
 
 
-async def scrape_linkedin(
-    keyword: str, since: date, until: date, pw: Playwright, sort_by: str = "date_posted"
-) -> list[dict]:
-    """Scrape LinkedIn search results for a single keyword."""
+async def _extract_post_urls(page, result_selector: str) -> list[dict]:
+    """Extract post URLs and quoted post URLs from each result item.
+
+    First tries JS-based extraction from the DOM. For items where that fails,
+    falls back to the "Copy link to post" clipboard interaction.
+    """
+    items = page.locator(result_selector)
+    count = await items.count()
+    url_data: list[dict] = []
+
+    for i in range(count):
+        item = items.nth(i)
+        data = await item.evaluate("""el => {
+            let postUrl = '';
+            // Strategy 1: share URN from componentkey attributes
+            const shareMatch = el.innerHTML.match(/shareId=(\\d+)/);
+            if (shareMatch) {
+                postUrl = 'https://www.linkedin.com/feed/update/urn:li:share:' + shareMatch[1];
+            }
+            // Strategy 2: ugcPost URN
+            if (!postUrl) {
+                const ugcMatch = el.innerHTML.match(/userGeneratedContentId=(\\d+)/);
+                if (ugcMatch) {
+                    postUrl = 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + ugcMatch[1];
+                }
+            }
+            // Strategy 3: activity link
+            if (!postUrl) {
+                const activityMatch = el.innerHTML.match(/activity[/:](\\d{15,})/);
+                if (activityMatch) {
+                    postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityMatch[1];
+                }
+            }
+            // Strategy 4: data-urn attribute
+            if (!postUrl) {
+                const urnEl = el.querySelector('[data-urn]');
+                if (urnEl) {
+                    const urn = urnEl.getAttribute('data-urn');
+                    if (urn && urn.includes(':activity:')) {
+                        postUrl = 'https://www.linkedin.com/feed/update/' + urn;
+                    }
+                }
+            }
+            // Strategy 5: feed/update link in href
+            if (!postUrl) {
+                const feedLink = el.querySelector('a[href*="feed/update"]');
+                if (feedLink) {
+                    let href = feedLink.getAttribute('href') || '';
+                    if (href.includes('?')) href = href.split('?')[0];
+                    postUrl = href;
+                }
+            }
+
+            // Quoted/reshared post URL
+            let quotedPostUrl = '';
+            const reshareArticle = el.querySelector(
+                'article.feed-reshare-content, article[data-test-id="feed-reshare-content"], article[aria-label="Reshared post"]'
+            );
+            if (reshareArticle) {
+                const reshareActivityUrn = reshareArticle.getAttribute('data-activity-urn');
+                if (reshareActivityUrn && reshareActivityUrn.includes(':activity:')) {
+                    quotedPostUrl = 'https://www.linkedin.com/feed/update/' + reshareActivityUrn;
+                }
+                if (!quotedPostUrl) {
+                    const reshareShareUrn = reshareArticle.getAttribute('data-attributed-urn');
+                    if (reshareShareUrn && reshareShareUrn.includes(':share:')) {
+                        quotedPostUrl = 'https://www.linkedin.com/feed/update/' + reshareShareUrn;
+                    }
+                }
+            }
+
+            return { postUrl, quotedPostUrl };
+        }""")
+
+        # Fallback: use clipboard "Copy link to post" if JS extraction failed
+        if not data.get("postUrl"):
+            clipboard_url = await _copy_post_link(item, page)
+            if clipboard_url:
+                data["postUrl"] = clipboard_url
+
+        url_data.append(data)
+
+    return url_data
+
+
+async def _capture_html(
+    keyword: str, since: date, pw: Playwright, sort_by: str = "date_posted"
+) -> tuple[str | None, list[dict]]:
+    """Use Playwright to load, scroll, and capture the fully-rendered HTML.
+
+    Returns a tuple of (filepath, url_data) where filepath is the saved HTML
+    file path and url_data is a list of {postUrl, quotedPostUrl} dicts extracted
+    via JS (one per result item, in DOM order). Returns (None, []) if no results.
+    """
     state_path = config.LINKEDIN_AUTH_STATE_FILE
     if not os.path.exists(state_path):
         raise FileNotFoundError(
@@ -133,7 +223,6 @@ async def scrape_linkedin(
     )
     page = await context.new_page()
 
-    results: list[dict] = []
     try:
         url = build_linkedin_url(keyword, since, sort_by=sort_by)
         logger.debug("LinkedIn navigating to: %s", url)
@@ -145,7 +234,7 @@ async def scrape_linkedin(
             logger.warning(
                 "Session expired for LinkedIn. Re-run: uv run search.py --auth linkedin"
             )
-            return []
+            return None, []
 
         # Click the "Top Match" filter for relevance searches
         if not sort_by:
@@ -163,11 +252,11 @@ async def scrape_linkedin(
         if not result_selector:
             logger.debug("Current URL after timeout: %s", page.url)
             logger.info("No results found for keyword %r on LinkedIn (sort=%s)", keyword, sort_by)
-            return []
+            return None, []
 
         # Scroll loop to load more results
         stale_scrolls = 0
-        max_stale = 3  # stop after this many consecutive scrolls with no new results
+        max_stale = 3
         for attempt in range(config.LINKEDIN_MAX_SCROLL_ATTEMPTS):
             count_before = await page.locator(result_selector).count()
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -181,181 +270,164 @@ async def scrape_linkedin(
             else:
                 stale_scrolls = 0
 
-        # Extract data from each result
-        items = page.locator(result_selector)
-        count = await items.count()
+        # Extract post URLs via JS + clipboard fallback before capturing HTML
+        url_data = await _extract_post_urls(page, result_selector)
 
-        for i in range(count):
-            item = items.nth(i)
-            try:
-                # Extract all data via a single JS evaluation for reliability
-                data = await item.evaluate("""el => {
-                    // Author name: first <p> with a specific style variable
-                    const authorP = el.querySelector('p[style*="--_2f26bb22"]');
-                    const author = authorP ? authorP.textContent.trim() : '';
+        # Capture the fully-rendered HTML
+        html = await page.content()
 
-                    // Timestamp: <p> containing time indicators like "1d", "3w", "2mo"
-                    const allPs = el.querySelectorAll('p');
-                    let timeText = '';
-                    for (const p of allPs) {
-                        const t = p.textContent.trim();
-                        if (/^\d+[mhdwmo]+\s*[•·]/.test(t) || /^\d+\s*(min|hour|day|week|month)/.test(t)) {
-                            timeText = t;
-                            break;
-                        }
-                    }
+        # Save to tmp files
+        os.makedirs(TMP_DIR, exist_ok=True)
+        sort_label = sort_by or "relevance"
+        safe_keyword = re.sub(r"[^a-zA-Z0-9]", "_", keyword).lower()
 
-                    // Post text from expandable text box
-                    const textBox = el.querySelector('[data-testid="expandable-text-box"]');
-                    let text = '';
-                    if (textBox) {
-                        // Resolve links: use href for truncated display text
-                        function resolveNode(node) {
-                            let result = '';
-                            for (const child of node.childNodes) {
-                                if (child.nodeType === 3) {
-                                    result += child.textContent;
-                                } else if (child.tagName === 'IMG') {
-                                    // LinkedIn renders emojis as <img> with alt text
-                                    const alt = child.getAttribute('alt') || '';
-                                    if (alt) result += alt;
-                                } else if (child.tagName === 'A') {
-                                    const href = child.getAttribute('href') || '';
-                                    const display = child.textContent || '';
-                                    if (display.includes('\u2026') || display.endsWith('...')) {
-                                        result += href;
-                                    } else {
-                                        result += display;
-                                    }
-                                } else if (child.tagName === 'BUTTON') {
-                                    // Skip "...more" buttons
-                                    continue;
-                                } else {
-                                    result += resolveNode(child);
-                                }
-                            }
-                            return result;
-                        }
-                        text = resolveNode(textBox).trim();
-                    }
+        html_filename = f"linkedin_{safe_keyword}_{sort_label}.html"
+        html_filepath = os.path.join(TMP_DIR, html_filename)
+        with open(html_filepath, "w", encoding="utf-8") as f:
+            f.write(html)
 
-                    // Post URL: try multiple extraction strategies
-                    let postUrl = '';
-                    // Strategy 1: share URN from componentkey attributes
-                    const shareMatch = el.innerHTML.match(/shareId=(\d+)/);
-                    if (shareMatch) {
-                        postUrl = 'https://www.linkedin.com/feed/update/urn:li:share:' + shareMatch[1];
-                    }
-                    // Strategy 2: ugcPost URN from userGeneratedContentId
-                    if (!postUrl) {
-                        const ugcMatch = el.innerHTML.match(/userGeneratedContentId=(\d+)/);
-                        if (ugcMatch) {
-                            postUrl = 'https://www.linkedin.com/feed/update/urn:li:ugcPost:' + ugcMatch[1];
-                        }
-                    }
-                    // Strategy 3: activity link
-                    if (!postUrl) {
-                        const activityMatch = el.innerHTML.match(/activity[/:](\d{15,})/);
-                        if (activityMatch) {
-                            postUrl = 'https://www.linkedin.com/feed/update/urn:li:activity:' + activityMatch[1];
-                        }
-                    }
-                    // Strategy 4: data-urn attribute
-                    if (!postUrl) {
-                        const urnEl = el.querySelector('[data-urn]');
-                        if (urnEl) {
-                            const urn = urnEl.getAttribute('data-urn');
-                            if (urn && urn.includes(':activity:')) {
-                                postUrl = 'https://www.linkedin.com/feed/update/' + urn;
-                            }
-                        }
-                    }
+        urls_filename = f"linkedin_{safe_keyword}_{sort_label}_urls.json"
+        urls_filepath = os.path.join(TMP_DIR, urls_filename)
+        with open(urls_filepath, "w", encoding="utf-8") as f:
+            json.dump(url_data, f, indent=2)
 
-                    // Author profile URL
-                    let authorUrl = '';
-                    const authorLink = el.querySelector('a[href*="/in/"], a[href*="/company/"]');
-                    if (authorLink) {
-                        authorUrl = authorLink.getAttribute('href') || '';
-                        if (authorUrl.includes('?')) authorUrl = authorUrl.split('?')[0];
-                    }
+        logger.info("Saved LinkedIn HTML to %s (%d URL records)", html_filepath, len(url_data))
 
-                    // Quoted/reshared post detection
-                    let quotedPostUrl = '';
-                    const reshareArticle = el.querySelector(
-                        'article.feed-reshare-content, article[data-test-id="feed-reshare-content"], article[aria-label="Reshared post"]'
-                    );
-                    if (reshareArticle) {
-                        const reshareActivityUrn = reshareArticle.getAttribute('data-activity-urn');
-                        if (reshareActivityUrn && reshareActivityUrn.includes(':activity:')) {
-                            quotedPostUrl = 'https://www.linkedin.com/feed/update/' + reshareActivityUrn;
-                        }
-                        if (!quotedPostUrl) {
-                            const reshareShareUrn = reshareArticle.getAttribute('data-attributed-urn');
-                            if (reshareShareUrn && reshareShareUrn.includes(':share:')) {
-                                quotedPostUrl = 'https://www.linkedin.com/feed/update/' + reshareShareUrn;
-                            }
-                        }
-                    }
-
-                    return { author, timeText, text, postUrl, authorUrl, quotedPostUrl };
-                }""")
-
-                author_name = data.get("author", "Unknown") or "Unknown"
-                text = data.get("text", "")
-                time_text = data.get("timeText", "")
-                post_url = data.get("postUrl", "")
-                quoted_post_url = data.get("quotedPostUrl", "")
-                post_date = parse_relative_time(time_text)
-
-                # If URL is still missing, use the "Copy link to post" menu
-                if not post_url:
-                    post_url = await _copy_post_link(item, page)
-
-                # Type detection based on content
-                post_type = "Repost" if quoted_post_url else "Post"
-                if data.get("authorUrl") and "/company/" in data.get("authorUrl", ""):
-                    post_type = "Repost" if quoted_post_url else "Post"
-
-                # Exclusion filter
-                text_lower = text.lower()
-                if any(ex.lower() in text_lower for ex in config.EXCLUSIONS.get("linkedin", [])):
-                    continue
-
-                # Date filter
-                if post_date < since.isoformat() or post_date > until.isoformat():
-                    continue
-
-                # Filter out posts where "dapr" is not a standalone keyword
-                # (e.g. French "d'après" contains "dapr" as a substring)
-                if not has_dapr_keyword(text):
-                    continue
-
-                # Filter out posts where "dapr" only appears in a YouTube video ID
-                if only_dapr_in_youtube_id(text):
-                    continue
-
-                # Filter out adult content
-                if is_nsfw(text):
-                    continue
-
-                results.append({
-                    "date": post_date,
-                    "author": author_name,
-                    "text": text,
-                    "url": post_url,
-                    "quoted_url": quoted_post_url,
-                    "type": post_type,
-                    "platform": "linkedin",
-                })
-            except Exception as exc:
-                logger.debug("Failed to extract LinkedIn result %d: %s", i, exc)
-                continue
+        return html_filepath, url_data
     finally:
         await context.close()
         await browser.close()
 
-    logger.debug("LinkedIn keyword %r returned %d results", keyword, len(results))
+
+def _resolve_text_node(element) -> str:
+    """Recursively resolve text from a BeautifulSoup element, handling links and emojis."""
+    result = ""
+    for child in element.children:
+        if isinstance(child, NavigableString):
+            result += str(child)
+        elif child.name == "img":
+            alt = child.get("alt", "")
+            if alt:
+                result += alt
+        elif child.name == "a":
+            href = child.get("href", "")
+            display = child.get_text()
+            if "\u2026" in display or display.endswith("..."):
+                result += href
+            else:
+                result += display
+        elif child.name == "button":
+            continue
+        else:
+            result += _resolve_text_node(child)
+    return result
+
+
+def _parse_html(filepath: str, url_data: list[dict], since: date, until: date) -> list[dict]:
+    """Parse LinkedIn search results from a saved HTML file using BeautifulSoup.
+
+    Args:
+        filepath: Path to the saved HTML file.
+        url_data: List of {postUrl, quotedPostUrl} dicts extracted via Playwright JS,
+                  one per result item in DOM order.
+        since: Start date for filtering.
+        until: End date for filtering.
+    """
+    with open(filepath, "r", encoding="utf-8") as f:
+        soup = BeautifulSoup(f, "html.parser")
+
+    results: list[dict] = []
+
+    # Try each selector strategy to find result items
+    items = soup.select('[data-testid="lazy-column"] div[role="listitem"]')
+    if not items:
+        items = soup.select('div.search-results-container div[role="listitem"]')
+    if not items:
+        items = soup.select('div.reusable-search__entity-result-list li.reusable-search__result-container')
+    if not items:
+        items = soup.select('ul.reusable-search__entity-result-list > li')
+
+    logger.debug("BeautifulSoup found %d result items in %s", len(items), filepath)
+
+    for i, item in enumerate(items):
+        try:
+            # Author name: first <p> with the LinkedIn style variable
+            author_p = item.select_one('p[style*="--_2f26bb22"]')
+            author_name = author_p.get_text(strip=True) if author_p else "Unknown"
+
+            # Timestamp: <p> containing time indicators
+            time_text = ""
+            for p in item.find_all("p"):
+                t = p.get_text(strip=True)
+                if re.match(r"^\d+[mhdwmo]+\s*[•·]", t) or re.match(r"^\d+\s*(min|hour|day|week|month)", t):
+                    time_text = t
+                    break
+
+            post_date = parse_relative_time(time_text)
+
+            # Post text from expandable text box
+            text_box = item.select_one('[data-testid="expandable-text-box"]')
+            text = _resolve_text_node(text_box).strip() if text_box else ""
+
+            # Post URL and quoted post URL from Playwright JS extraction
+            item_urls = url_data[i] if i < len(url_data) else {}
+            post_url = item_urls.get("postUrl", "")
+            quoted_post_url = item_urls.get("quotedPostUrl", "")
+
+            # Type detection
+            post_type = "Repost" if quoted_post_url else "Post"
+
+            # Exclusion filter
+            text_lower = text.lower()
+            if any(ex.lower() in text_lower for ex in config.EXCLUSIONS.get("linkedin", [])):
+                continue
+
+            # Date filter
+            if post_date < since.isoformat() or post_date > until.isoformat():
+                continue
+
+            # Filter out posts where "dapr" is not a standalone keyword
+            if not has_dapr_keyword(text):
+                continue
+
+            # Filter out posts where "dapr" only appears in a YouTube video ID
+            if only_dapr_in_youtube_id(text):
+                continue
+
+            # Filter out adult content
+            if is_nsfw(text):
+                continue
+
+            results.append({
+                "date": post_date,
+                "author": author_name,
+                "text": text,
+                "url": post_url,
+                "quoted_url": quoted_post_url,
+                "type": post_type,
+                "platform": "linkedin",
+            })
+        except Exception as exc:
+            logger.debug("Failed to parse LinkedIn result %d: %s", i, exc)
+            continue
+
+    logger.debug("Parsed %d valid results from %s", len(results), filepath)
     return results
+
+
+async def scrape_linkedin(
+    keyword: str, since: date, until: date, pw: Playwright, sort_by: str = "date_posted"
+) -> list[dict]:
+    """Scrape LinkedIn search results for a single keyword.
+
+    Phase 1: Playwright renders the page and scrolls to load all results.
+    Phase 2: The fully-rendered HTML is saved to a temp file.
+    Phase 3: BeautifulSoup parses the data from the saved HTML.
+    """
+    filepath, url_data = await _capture_html(keyword, since, pw, sort_by=sort_by)
+    if not filepath:
+        return []
+    return _parse_html(filepath, url_data, since, until)
 
 
 async def run_linkedin(since: date, until: date) -> list[dict]:

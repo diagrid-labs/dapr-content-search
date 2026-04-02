@@ -1,3 +1,4 @@
 community-search/auth/
 community-search/.venv/
+community-search/tmp/
 __pycache__/
