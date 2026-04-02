@@ -73,6 +73,9 @@ def render_results(results: list[dict]) -> str:
             f"### Post\n\n{r['text']}\n\n"
             f"### URL\n\n{r['url']}\n"
         )
+        quoted_url = r.get("quoted_url", "")
+        if quoted_url:
+            section += f"\n### Quoted Post URL\n\n{quoted_url}\n"
         sections.append(section)
     return "\n---\n\n".join(sections)
 
@@ -201,12 +204,13 @@ async def main() -> None:
         results = await run_platform(name, since, until)
         all_results.extend(results)
 
-    # Deduplicate by URL across platforms
+    # Deduplicate by URL across platforms (use author+text hash for empty URLs)
     seen: set[str] = set()
     deduped: list[dict] = []
     for r in all_results:
-        if r["url"] not in seen:
-            seen.add(r["url"])
+        dedup_key = r["url"] if r["url"] else f"{r['author']}:{r['text'][:200]}"
+        if dedup_key not in seen:
+            seen.add(dedup_key)
             deduped.append(r)
 
     # Sort by date descending

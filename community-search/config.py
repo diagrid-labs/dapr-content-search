@@ -16,8 +16,6 @@ UNTIL_DATE: date = date(2026, 4, 1)
 # deduplicated by URL.
 SEARCH_KEYWORDS: list[str] = [
     "Dapr",
-    "Dapr Workflow",
-    "Dapr Agents",
 ]
 
 # ---------------------------------------------------------------------------

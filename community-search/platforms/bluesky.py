@@ -7,7 +7,7 @@ from datetime import date
 import httpx
 
 import config
-from platforms import is_nsfw, only_dapr_in_youtube_id
+from platforms import has_dapr_keyword, is_nsfw, only_dapr_in_youtube_id
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,10 @@ async def search_bluesky(
                 # Apply exclusion filter
                 text_lower = text.lower()
                 if any(ex.lower() in text_lower for ex in config.EXCLUSIONS.get("bluesky", [])):
+                    continue
+
+                # Filter out posts where "dapr" is not a standalone keyword
+                if not has_dapr_keyword(text):
                     continue
 
                 # Filter out posts where "dapr" only appears in a YouTube video ID

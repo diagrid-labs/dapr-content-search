@@ -8,7 +8,7 @@ from urllib.parse import quote
 from playwright.async_api import Playwright, async_playwright
 
 import config
-from platforms import is_nsfw, only_dapr_in_youtube_id
+from platforms import has_dapr_keyword, is_nsfw, only_dapr_in_youtube_id
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,10 @@ async def scrape_x(
 
                 # Date filter
                 if post_date and (post_date < since.isoformat() or post_date > until.isoformat()):
+                    continue
+
+                # Filter out posts where "dapr" is not a standalone keyword
+                if not has_dapr_keyword(text):
                     continue
 
                 # Filter out posts where "dapr" only appears in a YouTube video ID

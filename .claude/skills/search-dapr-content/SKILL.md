@@ -8,6 +8,8 @@ user-invocable: true
 
 Search social media platforms (X, LinkedIn, Bluesky) for Dapr-related community content. The app searches for keywords defined in `community-search/config.py` (e.g., `Dapr`, `Dapr Workflow`, `Dapr Agents`).
 
+**False positive filtering**: The scrapers automatically reject posts where "dapr" only appears as a substring inside another word (e.g., the French word "d'après"). The `has_dapr_keyword()` function in `platforms/__init__.py` enforces that "dapr" must appear as a standalone keyword, not surrounded by letters or apostrophes.
+
 ## How to Use
 
 The user may provide:
