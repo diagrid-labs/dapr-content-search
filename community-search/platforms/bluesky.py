@@ -1,5 +1,6 @@
 """Bluesky search via the AT Protocol public API."""
 
+import asyncio
 import logging
 from datetime import date
 
@@ -35,6 +36,9 @@ async def search_bluesky(
             logger.debug("Bluesky request page %d: %s params=%s", page + 1, url, params)
 
             resp = await client.get(url, params=params, timeout=30.0)
+            if resp.status_code == 403:
+                logger.warning("Bluesky returned 403 on page %d — likely rate limited. Returning %d results collected so far.", page + 1, len(results))
+                break
             resp.raise_for_status()
             data = resp.json()
 
@@ -96,6 +100,9 @@ async def search_bluesky(
             cursor = data.get("cursor")
             if not cursor:
                 break
+
+            # Delay between pages to avoid rate limiting
+            await asyncio.sleep(1.0)
 
     logger.debug("Bluesky keyword %r returned %d results", keyword, len(results))
     return results
