@@ -12,6 +12,45 @@ from platforms import is_nsfw, only_dapr_in_youtube_id
 logger = logging.getLogger(__name__)
 
 
+def resolve_facet_links(text: str, facets: list[dict]) -> str:
+    """Replace truncated URLs in text with full URIs from Bluesky facets.
+
+    Bluesky stores the display text (often shortened) in the record text and
+    the complete URIs in ``record.facets``.  Facet indices are byte-based, so
+    we operate on the UTF-8 encoded bytes and decode back at the end.
+    """
+    if not facets:
+        return text
+
+    text_bytes = text.encode("utf-8")
+
+    # Collect link facets with their byte ranges and full URIs
+    link_facets: list[dict] = []
+    for facet in facets:
+        for feature in facet.get("features", []):
+            if feature.get("$type") == "app.bsky.richtext.facet#link":
+                index = facet.get("index", {})
+                uri = feature.get("uri", "")
+                if uri:
+                    link_facets.append({
+                        "start": index.get("byteStart", 0),
+                        "end": index.get("byteEnd", 0),
+                        "uri": uri,
+                    })
+
+    # Replace from the end so earlier byte offsets stay valid
+    link_facets.sort(key=lambda f: f["start"], reverse=True)
+
+    for lf in link_facets:
+        text_bytes = (
+            text_bytes[: lf["start"]]
+            + lf["uri"].encode("utf-8")
+            + text_bytes[lf["end"] :]
+        )
+
+    return text_bytes.decode("utf-8")
+
+
 async def search_bluesky(
     keyword: str, since: date, until: date
 ) -> list[dict]:
@@ -45,7 +84,8 @@ async def search_bluesky(
             for post in data.get("posts", []):
                 record = post.get("record", {})
                 author = post.get("author", {})
-                text = record.get("text", "")
+                raw_text = record.get("text", "")
+                text = resolve_facet_links(raw_text, record.get("facets", []))
 
                 # Apply exclusion filter
                 text_lower = text.lower()
@@ -79,13 +119,15 @@ async def search_bluesky(
                 display_name = author.get("displayName") or handle
 
                 # Detect post type
+                is_reply = record.get("reply") is not None
                 embed = post.get("embed", {})
                 embed_type = embed.get("$type", "") if embed else ""
-                post_type = (
-                    "Post with link"
-                    if embed_type == "app.bsky.embed.external#view"
-                    else "Post"
-                )
+                if is_reply:
+                    post_type = "Reply post"
+                elif embed_type == "app.bsky.embed.external#view":
+                    post_type = "Post with link"
+                else:
+                    post_type = "Post"
 
                 results.append({
                     "date": post_date,

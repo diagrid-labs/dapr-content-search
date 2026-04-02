@@ -13,7 +13,7 @@ Search social media platforms (X, LinkedIn, Bluesky) for Dapr-related community 
 The user may provide:
 - **Platform**: `x`, `linkedin`, `bluesky`, or `all`. Default: `all`.
 - **Date range**: A `--since` and/or `--until` date. Default: last 30 days from today.
-- **Output file**: A custom output path. Default: `community-search/YYYY-MM-DD-community-content.md`.
+- **Output file**: A custom output path. Default: `reports/YYYY-MM-DD-community-content.md` (in the repo root).
 - **Authentication**: The user may ask to authenticate for X or LinkedIn. This requires an interactive browser and must be run by the user themselves.
 
 **Important platform notes:**
@@ -81,4 +81,65 @@ cd community-search && uv run python search.py --auth linkedin
    - If a platform logs a warning about being redirected to `/login`, the session has expired. The user needs to re-authenticate using the auth commands above.
    - If no results are found, inform the user.
 
-6. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics).
+6. **Analyze and enrich each post**: After the markdown file is written, read it and process every post. For each post, add two new subsections (after the `### URL` section):
+
+   - **`### Sentiment`**: Analyze the post text and assign one of: `positive`, `neutral`, or `negative`.
+   - **`### Relevancy Score`**: Assess how relevant the post is to Dapr and assign one of these values:
+     - **high**: The post is clearly about **Dapr** (the distributed application runtime) or **Dapr Agents** (the Python library for building agentic AI applications).
+     - **medium**: The post is somewhat relevant to Dapr (mentions Dapr in passing, discusses related distributed systems topics alongside Dapr, or is tangentially connected).
+     - **low**: The post is not relevant to Dapr at all (e.g., uses "dapr" as slang, is about a different topic entirely, or matched the search keywords by accident).
+
+   The final format for each post should be (where Type is one of `Post`, `Post with link`, `Article share`, or `Reply post`):
+   ```
+   ## YYYY-MM-DD — [Type]
+
+   ### Platform
+
+   [x|linkedin|bluesky]
+
+   ### Author
+
+   [author]
+
+   ### Post
+
+   [text]
+
+   ### URL
+
+   [url]
+
+   ### Sentiment
+
+   [positive|neutral|negative]
+
+   ### Relevancy Score
+
+   [high|medium|low]
+   ```
+
+7. **Reorder posts by relevancy**: Sort all posts by their Relevancy Score in descending order (high first, then medium, then low). Within the same relevancy, keep the original date-descending order. Rewrite the markdown file with the reordered posts, preserving the `# Dapr Community Content` header and horizontal rule separators between posts.
+
+8. **Add a summary table**: After reordering, insert a summary table immediately after the `# Dapr Community Content — ...` heading and before the first post. The table provides a quick overview of all posts with internal links to jump to the full content.
+
+   For each post, generate a GitHub-flavored Markdown anchor from the `## YYYY-MM-DD — [Type]` heading. The anchor is created by lowercasing, replacing spaces with `-`, and removing special characters (e.g., `## 2026-03-31 — Post with link` → `#2026-03-31--post-with-link`). If there are duplicate headings, append `-1`, `-2`, etc. to subsequent duplicates (matching GFM behavior).
+
+   The table format:
+
+   ```
+   | # | Platform | Author | Summary | Sentiment | Relevancy Score | Link |
+   |---|----------|--------|---------|-----------|-----------------|------|
+   | 1 | bluesky | Author Name | One sentence summary of the post content | positive | high | [View](#2026-03-31--post-with-link) |
+   | 2 | x | Author Name | One sentence summary of the post content | neutral | medium | [View](#2026-03-30--reply-post) |
+   ```
+
+   Rules for the table:
+   - **#**: Sequential number starting at 1.
+   - **Platform**: The platform name as it appears in the post's `### Platform` section (`x`, `linkedin`, or `bluesky`).
+   - **Author**: The author name (without the handle/platform identifier in parentheses).
+   - **Summary**: A single concise sentence summarizing what the post is about. Keep it under 100 characters.
+   - **Sentiment**: The sentiment value already assigned to the post.
+   - **Relevancy Score**: The relevancy score value already assigned to the post (`high`, `medium`, or `low`).
+   - **Link**: An internal markdown link `[View](#anchor)` pointing to the post's heading anchor.
+
+9. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics, relevancy score distribution).

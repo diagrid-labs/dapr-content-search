@@ -96,9 +96,42 @@ async def scrape_x(
                 handle_href = await handle_el.get_attribute("href") if await handle_el.count() else ""
                 handle = f"@{handle_href.strip('/')}" if handle_href else ""
 
-                # Tweet text
+                # Tweet text — resolve truncated display URLs to full links
                 text_el = article.locator('[data-testid="tweetText"]').first
-                text = await text_el.inner_text() if await text_el.count() else ""
+                if await text_el.count():
+                    text = await text_el.evaluate("""el => {
+                        let result = '';
+                        for (const node of el.childNodes) {
+                            if (node.nodeType === 3) {
+                                result += node.textContent;
+                            } else if (node.tagName === 'A') {
+                                result += node.getAttribute('title') || node.getAttribute('href') || node.textContent;
+                            } else if (node.tagName === 'IMG') {
+                                result += node.getAttribute('alt') || '';
+                            } else {
+                                // Recurse into spans and other containers
+                                const links = node.querySelectorAll('a');
+                                if (links.length > 0) {
+                                    let inner = '';
+                                    for (const child of node.childNodes) {
+                                        if (child.nodeType === 3) {
+                                            inner += child.textContent;
+                                        } else if (child.tagName === 'A') {
+                                            inner += child.getAttribute('title') || child.getAttribute('href') || child.textContent;
+                                        } else {
+                                            inner += child.textContent || '';
+                                        }
+                                    }
+                                    result += inner;
+                                } else {
+                                    result += node.textContent || '';
+                                }
+                            }
+                        }
+                        return result;
+                    }""")
+                else:
+                    text = ""
 
                 # Timestamp
                 time_el = article.locator("time").first
@@ -110,9 +143,15 @@ async def scrape_x(
                 link_href = await link_el.get_attribute("href") if await link_el.count() else ""
                 tweet_url = f"https://x.com{link_href}" if link_href and link_href.startswith("/") else link_href
 
-                # Type detection: check for link card embed
+                # Type detection: check for reply and link card embed
+                reply_count = await article.locator('[data-testid="socialContext"]').count()
                 card_count = await article.locator('[data-testid="card.wrapper"]').count()
-                post_type = "Post with link" if card_count > 0 else "Post"
+                if reply_count > 0:
+                    post_type = "Reply post"
+                elif card_count > 0:
+                    post_type = "Post with link"
+                else:
+                    post_type = "Post"
 
                 # Date filter
                 if post_date and (post_date < since.isoformat() or post_date > until.isoformat()):

@@ -132,10 +132,35 @@ async def scrape_linkedin(
                 author_name = await name_el.inner_text() if await name_el.count() else "Unknown"
                 author_name = author_name.strip()
 
-                # Post text (truncated)
+                # Post text — resolve truncated display URLs to full links
                 text_el = item.locator(".update-components-text").first
-                text = await text_el.inner_text() if await text_el.count() else ""
-                text = text.strip()
+                if await text_el.count():
+                    text = await text_el.evaluate("""el => {
+                        function resolveNode(node) {
+                            let result = '';
+                            for (const child of node.childNodes) {
+                                if (child.nodeType === 3) {
+                                    result += child.textContent;
+                                } else if (child.tagName === 'A') {
+                                    const href = child.getAttribute('href') || '';
+                                    const display = child.textContent || '';
+                                    // Use href if the display text looks truncated
+                                    if (display.includes('…') || display.endsWith('...')) {
+                                        result += href;
+                                    } else {
+                                        result += display;
+                                    }
+                                } else {
+                                    result += resolveNode(child);
+                                }
+                            }
+                            return result;
+                        }
+                        return resolveNode(el);
+                    }""")
+                    text = text.strip()
+                else:
+                    text = ""
 
                 # Timestamp (relative)
                 time_el = item.locator(".update-components-actor__sub-description").first
@@ -153,7 +178,13 @@ async def scrape_linkedin(
 
                 # Type detection
                 article_count = await item.locator(".update-components-article").count()
-                post_type = "Article share" if article_count > 0 else "Post"
+                comment_count = await item.locator(".update-components-commentary").count()
+                if comment_count > 0:
+                    post_type = "Reply post"
+                elif article_count > 0:
+                    post_type = "Article share"
+                else:
+                    post_type = "Post"
 
                 # Exclusion filter
                 text_lower = text.lower()

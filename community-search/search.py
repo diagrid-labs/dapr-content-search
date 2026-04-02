@@ -68,6 +68,7 @@ def render_results(results: list[dict]) -> str:
     for r in results:
         section = (
             f"## {r['date']} — {r['type']}\n\n"
+            f"### Platform\n\n{r['platform']}\n\n"
             f"### Author\n\n{r['author']}\n\n"
             f"### Post\n\n{r['text']}\n\n"
             f"### URL\n\n{r['url']}\n"
@@ -218,8 +219,13 @@ async def main() -> None:
     # Render table
     table_str = render_results(deduped)
 
-    # Determine output file path
-    output_path = args.output or f"{date.today().isoformat()}-community-content.md"
+    # Determine output file path (default: reports/ in repo root)
+    if args.output:
+        output_path = args.output
+    else:
+        reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        output_path = os.path.join(reports_dir, f"{date.today().isoformat()}-community-content.md")
 
     # Write to file
     append_to_file(output_path, since, until, table_str)
