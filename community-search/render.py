@@ -22,8 +22,8 @@ def slugify_heading(heading: str) -> str:
     """Convert a Markdown heading to a GitHub-flavored anchor slug."""
     slug = heading.lower()
     slug = re.sub(r"[^\w\s-]", "", slug)
-    slug = re.sub(r"\s+", "-", slug.strip())
-    slug = re.sub(r"-+", "-", slug)
+    slug = slug.strip()
+    slug = slug.replace(" ", "-")
     return slug
 
 
