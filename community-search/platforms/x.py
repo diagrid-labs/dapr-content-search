@@ -1,5 +1,6 @@
 """X (Twitter) scraper using Playwright."""
 
+import asyncio
 import logging
 import os
 from datetime import date
@@ -178,17 +179,18 @@ async def scrape_x(
 
 
 async def run_x(since: date, until: date) -> list[dict]:
-    """Run X search for all configured keywords, deduplicate by URL."""
+    """Run X search for all configured keywords in parallel, deduplicate by URL."""
+    async with async_playwright() as pw:
+        tasks = [scrape_x(kw, since, until, pw) for kw in config.SEARCH_KEYWORDS]
+        batches = await asyncio.gather(*tasks)
+
     all_results: list[dict] = []
     seen_urls: set[str] = set()
-
-    async with async_playwright() as pw:
-        for keyword in config.SEARCH_KEYWORDS:
-            posts = await scrape_x(keyword, since, until, pw)
-            for post in posts:
-                if post["url"] not in seen_urls:
-                    seen_urls.add(post["url"])
-                    all_results.append(post)
+    for posts in batches:
+        for post in posts:
+            if post["url"] not in seen_urls:
+                seen_urls.add(post["url"])
+                all_results.append(post)
 
     logger.info("X: %d unique results across all keywords", len(all_results))
     return all_results

@@ -60,36 +60,6 @@ async def auth_setup(platform: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Output rendering
-# ---------------------------------------------------------------------------
-
-def render_results(results: list[dict]) -> str:
-    """Render results as Markdown with headings."""
-    sections: list[str] = []
-    for r in results:
-        section = (
-            f"## {r['date']} — {r['type']}\n\n"
-            f"### Platform\n\n{r['platform']}\n\n"
-            f"### Author\n\n{r['author']}\n\n"
-            f"### Post\n\n{r['text']}\n\n"
-            f"### URL\n\n{r['url']}\n"
-        )
-        quoted_url = r.get("quoted_url", "")
-        if quoted_url:
-            section += f"\n### Quoted Post URL\n\n{quoted_url}\n"
-        sections.append(section)
-    return "\n---\n\n".join(sections)
-
-
-def append_to_file(path: str, since: date, until: date, content: str) -> None:
-    """Append the Markdown content to a file with a section header."""
-    with open(path, "a") as f:
-        f.write(f"# Dapr Community Content — {since} to {until}\n\n")
-        f.write(content)
-        f.write("\n")
-
-
-# ---------------------------------------------------------------------------
 # Platform runners (with error isolation)
 # ---------------------------------------------------------------------------
 
@@ -148,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output", type=str, default=None,
-        help="Write results to this file (default: YYYY-MM-DD-community-content.md)",
+        help="Write results to this JSON file (default: reports/YYYY-MM-DD-community-content.json)",
     )
     parser.add_argument(
         "--verbose", action="store_true",
@@ -199,62 +169,61 @@ async def main() -> None:
     else:
         platforms = [args.platform]
 
-    # Run each platform (errors are caught per-platform)
-    all_results: list[dict] = []
-    for name in platforms:
-        results = await run_platform(name, since, until)
-        all_results.extend(results)
+    # Run platforms in parallel
+    platform_results = await asyncio.gather(
+        *(run_platform(name, since, until) for name in platforms)
+    )
 
-    # Deduplicate by URL across platforms (use author+text hash for empty URLs)
-    seen: set[str] = set()
-    deduped: list[dict] = []
-    for r in all_results:
-        dedup_key = r["url"] if r["url"] else f"{r['author']}:{r['text'][:200]}"
-        if dedup_key not in seen:
-            seen.add(dedup_key)
-            deduped.append(r)
+    # Write a separate JSON file per platform
+    reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")
+    os.makedirs(reports_dir, exist_ok=True)
 
-    # Sort by date descending
-    deduped.sort(key=lambda r: r["date"], reverse=True)
+    total_posts = 0
+    for name, results in zip(platforms, platform_results):
+        if not results:
+            print(f"[{name}] No results found.")
+            continue
 
-    if not deduped:
-        print("No results found.")
-        return
+        # Deduplicate by URL (use author+text hash for empty URLs)
+        seen: set[str] = set()
+        deduped: list[dict] = []
+        for r in results:
+            dedup_key = r["url"] if r["url"] else f"{r['author']}:{r['text'][:200]}"
+            if dedup_key not in seen:
+                seen.add(dedup_key)
+                deduped.append(r)
 
-    # Render markdown
-    table_str = render_results(deduped)
+        # Sort by date descending
+        deduped.sort(key=lambda r: r["date"], reverse=True)
 
-    # Determine output file path (default: reports/ in repo root)
-    if args.output:
-        output_path = args.output
-    else:
-        reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")
-        os.makedirs(reports_dir, exist_ok=True)
-        output_path = os.path.join(reports_dir, f"{date.today().isoformat()}-community-content.md")
+        # Determine output file path
+        if args.output:
+            base, ext = os.path.splitext(args.output)
+            output_path = f"{base}-{name}{ext or '.json'}"
+        else:
+            output_path = os.path.join(reports_dir, f"{date.today().isoformat()}-{name}-community-content.json")
 
-    # Write markdown file
-    append_to_file(output_path, since, until, table_str)
+        json_results = []
+        for r in deduped:
+            json_results.append({
+                "date": r["date"],
+                "author": r["author"],
+                "text": r["text"],
+                "url": r["url"],
+                "quoted_url": r.get("quoted_url", ""),
+                "type": r["type"],
+                "platform": r["platform"],
+                "sentiment": "",
+                "relevancy_score": "",
+            })
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(json_results, f, indent=2, ensure_ascii=False)
 
-    # Write JSON file alongside markdown for downstream enrichment
-    json_path = os.path.splitext(output_path)[0] + ".json"
-    json_results = []
-    for r in deduped:
-        json_results.append({
-            "date": r["date"],
-            "author": r["author"],
-            "text": r["text"],
-            "url": r["url"],
-            "quoted_url": r.get("quoted_url", ""),
-            "type": r["type"],
-            "platform": r["platform"],
-            "sentiment": "",
-            "relevancy_score": "",
-        })
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(json_results, f, indent=2, ensure_ascii=False)
+        print(f"JSON written to {output_path} ({len(deduped)} posts)")
+        total_posts += len(deduped)
 
-    print(f"Results written to {output_path} ({len(deduped)} posts)")
-    print(f"JSON written to {json_path}")
+    if total_posts == 0:
+        print("No results found across any platform.")
 
 
 if __name__ == "__main__":

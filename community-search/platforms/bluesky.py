@@ -155,12 +155,14 @@ async def search_bluesky(
 
 
 async def run_bluesky(since: date, until: date) -> list[dict]:
-    """Run Bluesky search for all configured keywords, deduplicate by URL."""
+    """Run Bluesky search for all configured keywords in parallel, deduplicate by URL."""
+    # Launch all keyword searches concurrently
+    tasks = [search_bluesky(kw, since, until) for kw in config.SEARCH_KEYWORDS]
+    batches = await asyncio.gather(*tasks)
+
     all_results: list[dict] = []
     seen_urls: set[str] = set()
-
-    for keyword in config.SEARCH_KEYWORDS:
-        posts = await search_bluesky(keyword, since, until)
+    for posts in batches:
         for post in posts:
             if post["url"] not in seen_urls:
                 seen_urls.add(post["url"])

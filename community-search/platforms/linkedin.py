@@ -1,5 +1,6 @@
 """LinkedIn scraper: Playwright for rendering, BeautifulSoup for parsing."""
 
+import asyncio
 import json
 import logging
 import os
@@ -438,23 +439,24 @@ async def scrape_linkedin(
 
 
 async def run_linkedin(since: date, until: date) -> list[dict]:
-    """Run LinkedIn search for all configured keywords, deduplicate by URL.
+    """Run LinkedIn search for all configured keywords in parallel, deduplicate by URL.
 
     Searches twice per keyword: once sorted by relevance (Top Match) and once
     sorted by date, so posts that only surface in one view are still captured.
     """
+    async with async_playwright() as pw:
+        # Launch all keyword searches concurrently (relevance sort)
+        tasks = [scrape_linkedin(kw, since, until, pw, sort_by="") for kw in config.SEARCH_KEYWORDS]
+        batches = await asyncio.gather(*tasks)
+
     all_results: list[dict] = []
     seen_keys: set[str] = set()
-
-    async with async_playwright() as pw:
-        for keyword in config.SEARCH_KEYWORDS:
-            posts = await scrape_linkedin(keyword, since, until, pw, sort_by="")
-            for post in posts:
-                # Deduplicate by URL if available, otherwise by author+text hash
-                dedup_key = post["url"] if post["url"] else f"{post['author']}:{post['text'][:200]}"
-                if dedup_key not in seen_keys:
-                    seen_keys.add(dedup_key)
-                    all_results.append(post)
+    for posts in batches:
+        for post in posts:
+            dedup_key = post["url"] if post["url"] else f"{post['author']}:{post['text'][:200]}"
+            if dedup_key not in seen_keys:
+                seen_keys.add(dedup_key)
+                all_results.append(post)
 
     logger.info("LinkedIn: %d unique results across all keywords", len(all_results))
     return all_results

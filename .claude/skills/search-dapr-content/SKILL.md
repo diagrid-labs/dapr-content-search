@@ -54,73 +54,145 @@ cd community-search && uv run python search.py --auth linkedin
 
 1. **Parse the user's request** to extract optional platform, date range, and output file preferences.
 
-2. **Build the command** using the `community-search/search.py` CLI:
-   - The CLI requires one of `--all` or `--platform <name>` — there is no default.
-   - Use `--all` if the user wants all platforms, or `--platform <name>` for a specific one.
+2. **Prepare the search parameters**:
    - Calculate `--since` and `--until` dates in `YYYY-MM-DD` format. If the user says something like "last 7 days", compute the dates relative to today.
-   - Add `--output <path>` if the user specified one.
+   - Determine which platforms to search: `x`, `linkedin`, `bluesky`, or all three.
    - Always add `--verbose` for detailed logging.
 
 3. **Check the environment**: If `.venv` does not exist in `community-search/`, run the First-Time Setup steps above.
 
-4. **Run the search** using `uv run` from the `community-search/` directory:
+4. **Run search + enrichment** — the approach depends on how many platforms are requested:
+
+   ### Single platform
+
+   Run the search directly, then enrich in the main conversation:
    ```
-   cd community-search && uv run python search.py --all --since YYYY-MM-DD --until YYYY-MM-DD --verbose
+   cd community-search && uv run python search.py --platform <name> --since YYYY-MM-DD --until YYYY-MM-DD --verbose
    ```
-   Or for a specific platform:
+   Then proceed to step 5 (enrich), step 6 (merge — skipped for single platform), and step 7 (render).
+
+   ### Multiple platforms (parallel pipeline)
+
+   Launch one **Agent subagent per platform in parallel** (use a single message with multiple Agent tool calls). Each subagent handles the full search-and-enrich pipeline for its platform independently, so fast platforms (e.g., Bluesky) complete without waiting for slower ones (e.g., LinkedIn).
+
+   Each subagent prompt should be:
+
    ```
-   cd community-search && uv run python search.py --platform bluesky --since YYYY-MM-DD --until YYYY-MM-DD --verbose
+   You are enriching Dapr community search results for the <PLATFORM> platform.
+
+   1. Run the search:
+      cd community-search && uv run python search.py --platform <PLATFORM> --since YYYY-MM-DD --until YYYY-MM-DD --verbose
+
+   2. Check the output. The script writes a JSON file to the reports/ directory
+      (e.g., reports/YYYY-MM-DD-<PLATFORM>-community-content.json).
+      If the platform fails with a FileNotFoundError about missing auth state,
+      or logs a warning about being redirected to /login, report the error and stop.
+
+   3. Enrich the JSON file:
+      - Read the platform JSON file.
+      - For each post, determine three fields:
+        - "sentiment": one of "positive", "neutral", or "negative" based on tone.
+        - "relevancy_score": one of "high", "medium", or "low":
+          - high: clearly about Dapr (distributed application runtime) or Dapr Agents (Python library for agentic AI).
+          - medium: mentions Dapr in passing or discusses related distributed systems topics alongside Dapr.
+          - low: not relevant to Dapr (slang, different topic, accidental keyword match).
+        - "summary": one concise sentence summarizing the post (under 100 characters).
+
+      **CRITICAL — Writing enrichment data back to JSON:**
+      NEVER use the Write tool to write JSON files directly — post text often contains quotes,
+      newlines, and special characters that will produce invalid JSON if not properly escaped.
+      ALWAYS use the `enrich.py` helper script which uses `json.dump` for correct escaping:
+
+      ```
+      cd community-search && uv run python enrich.py <json_path> --data '[{"sentiment": "positive", "relevancy_score": "high", "summary": "..."}, ...]'
+      ```
+
+      The --data argument must be a JSON array with one object per post (same order as the file),
+      containing only the three enrichment fields. Alternatively, write the enrichment array to a
+      temporary file and use --data-file:
+
+      ```
+      cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments.json
+      ```
+
+      If the file has more than 15 posts, use batched enrichment:
+      - Split: cd community-search && uv run python batch_split.py <json_path> --batch-size 15
+      - Launch one Agent subagent per batch in parallel to enrich each batch file.
+      - Merge batches back: cd community-search && uv run python batch_merge.py --pattern "reports/<base>_batch_*.json" --output <json_path> --delete-batches
+
+   4. Report the JSON file path and post count when done.
    ```
 
-5. **Check the output**:
-   - The script writes two files: a Markdown file and a **JSON file** (same name, `.json` extension). The JSON file contains the structured results for enrichment.
-   - If the script reports results written to a file, note the JSON file path for the next step.
-   - Note: Markdown results are **appended** to the output file. Running the same search twice will produce duplicates. The JSON file is overwritten each time.
-   - If a platform fails with a `FileNotFoundError` about missing auth state, inform the user they need to authenticate first by running the commands themselves (use `!` prefix):
+   After all platform subagents complete, proceed to step 6 (merge) and step 7 (render).
+
+5. **Enrich posts** (single-platform path only) — if you ran a single platform search directly in step 4 (not via subagent), enrich the JSON file now:
+
+   **For 15 or fewer posts**: Enrich directly in the main conversation.
+   - Read the platform JSON file.
+   - For each post, determine `sentiment`, `relevancy_score`, and `summary` (see Enrichment Rules below).
+   - **CRITICAL — Writing enrichment data back to JSON:**
+     NEVER use the Write tool to write JSON files directly — post text often contains quotes,
+     newlines, and special characters that will produce invalid JSON if not properly escaped.
+     ALWAYS use the `enrich.py` helper script which uses `json.dump` for correct escaping:
      ```
-     ! cd community-search && uv run python search.py --auth x
-     ! cd community-search && uv run python search.py --auth linkedin
+     cd community-search && uv run python enrich.py <json_path> --data '[{"sentiment": "positive", "relevancy_score": "high", "summary": "..."}, ...]'
      ```
-   - If a platform logs a warning about being redirected to `/login`, the session has expired. The user needs to re-authenticate using the auth commands above.
-   - If no results are found, inform the user.
+     The --data argument must be a JSON array with one object per post (same order as the file),
+     containing only the three enrichment fields. Alternatively, write the enrichment array to a
+     temporary file and use --data-file:
+     ```
+     cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments.json
+     ```
 
-6. **Enrich posts via JSON** — read the JSON file and determine the enrichment strategy based on result count:
-
-   **For 15 or fewer posts** (small set): Enrich directly in the main conversation.
-   - Read the JSON file.
-   - For each post, determine `sentiment` and `relevancy_score` (see Enrichment Rules below).
-   - Add a `summary` field (one concise sentence, under 100 characters).
-   - Write the enriched JSON back to the same file.
-
-   **For more than 15 posts** (large set): Use **batched parallel enrichment with subagents**.
-   - Read the JSON file to get the total post count.
-   - Split posts into batches of up to 15 posts each.
-   - For each batch, write a temporary JSON file: `reports/<base>_batch_N.json`
-   - Launch one **Agent** subagent per batch **in parallel** (use a single message with multiple Agent tool calls). Each subagent prompt should be:
+   **For more than 15 posts**: Use **batched parallel enrichment with subagents**.
+   - Split posts into batches using `batch_split.py`:
+     ```
+     cd community-search && uv run python batch_split.py <platform_json_file_path> --batch-size 15
+     ```
+   - Launch one **Agent** subagent per batch **in parallel**. Each subagent prompt should be:
 
      ```
-     Read the JSON file at <batch_file_path>. For each post in the array, fill in three fields:
+     Read the JSON file at <batch_file_path>. For each post in the array, determine three fields:
      - "sentiment": one of "positive", "neutral", or "negative" based on the post text tone.
      - "relevancy_score": one of "high", "medium", or "low":
        - high: clearly about Dapr (distributed application runtime) or Dapr Agents (Python library for agentic AI).
        - medium: mentions Dapr in passing or discusses related distributed systems topics alongside Dapr.
        - low: not relevant to Dapr (slang, different topic, accidental keyword match).
      - "summary": one concise sentence summarizing the post (under 100 characters).
-     Write the enriched array back to the same file path. Do not change any other fields.
+
+     CRITICAL: NEVER use the Write tool to write JSON files — post text contains quotes and
+     special characters that will produce invalid JSON. Instead, use the enrich.py helper:
+     cd community-search && uv run python enrich.py <batch_file_path> --data '[{"sentiment": "...", "relevancy_score": "...", "summary": "..."}, ...]'
+     Or write enrichments to a temp file and use: --data-file /tmp/enrichments_batch_N.json
      ```
 
-   - After all subagents complete, read and merge all batch files into one array, preserving original order.
-   - Write the merged enriched JSON back to the original JSON file path.
-   - Delete the temporary batch files.
+   - After all subagents complete, merge batch files back:
+     ```
+     cd community-search && uv run python batch_merge.py --pattern "reports/<platform_base>_batch_*.json" --output <platform_json_file_path> --delete-batches
+     ```
+
+6. **Merge platform JSON files** (multi-platform only) into a single combined JSON file using `batch_merge.py`. Do **not** delete the individual platform JSON files:
+   ```
+   cd community-search && uv run python batch_merge.py <platform_json_1> <platform_json_2> <platform_json_3> --output reports/YYYY-MM-DD-community-content.json
+   ```
+   Note: Do NOT use `--delete-batches` — the individual platform JSON files must be preserved.
+
+   Check the subagent results for auth errors. If a platform failed due to missing auth state or expired session, inform the user they need to authenticate by running:
+   ```
+   ! cd community-search && uv run python search.py --auth x
+   ! cd community-search && uv run python search.py --auth linkedin
+   ```
 
 7. **Render the final report** using `render.py`:
+   - For multi-platform: use the merged JSON file from step 6.
+   - For single-platform: use the enriched platform JSON file directly.
    ```
-   cd community-search && uv run python render.py <json_file_path> --output <markdown_file_path> --since YYYY-MM-DD --until YYYY-MM-DD
+   cd community-search && uv run python render.py <json_file_path> --output reports/YYYY-MM-DD-community-content.md --since YYYY-MM-DD --until YYYY-MM-DD
    ```
    This script handles all mechanical post-processing:
    - Reorders posts by relevancy score (high first, then medium, then low; date descending within each tier)
    - Generates the summary table with internal anchor links
-   - Writes the final Markdown file
+   - Writes the final Markdown file containing data from all platforms
 
 8. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics, relevancy score distribution).
 
