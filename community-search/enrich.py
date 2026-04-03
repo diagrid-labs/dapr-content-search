@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """Apply enrichment data to a JSON report file.
 
-Reads a JSON report file and an enrichment JSON string (or file), then merges
-the enrichment fields (sentiment, relevancy_score, summary) into the report
+Reads a JSON report file and an enrichment JSON file, then merges the
+enrichment fields (sentiment, relevancy_score, summary) into the report
 by matching on array index. Writes the result back using json.dump so that
 all string values are properly escaped.
 
 Usage:
-    # Enrichment from a JSON string:
-    uv run python enrich.py <report.json> --data '[{"sentiment": "positive", ...}, ...]'
-
-    # Enrichment from a file:
     uv run python enrich.py <report.json> --data-file enrichments.json
 """
 
@@ -27,13 +23,9 @@ def main() -> None:
         description="Merge enrichment fields into a JSON report file."
     )
     parser.add_argument("report", help="Path to the JSON report file to enrich.")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--data",
-        help="Enrichment data as a JSON string (array of objects).",
-    )
-    group.add_argument(
+    parser.add_argument(
         "--data-file",
+        required=True,
         help="Path to a JSON file containing the enrichment array.",
     )
     args = parser.parse_args()
@@ -43,11 +35,8 @@ def main() -> None:
         posts = json.load(f)
 
     # Load enrichment data
-    if args.data_file:
-        with open(args.data_file, "r", encoding="utf-8") as f:
-            enrichments = json.load(f)
-    else:
-        enrichments = json.loads(args.data)
+    with open(args.data_file, "r", encoding="utf-8") as f:
+        enrichments = json.load(f)
 
     if len(enrichments) != len(posts):
         print(

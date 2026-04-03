@@ -14,6 +14,8 @@ import re
 import sys
 from datetime import date
 
+from stats import build_stats, render_stats_table
+
 
 RELEVANCY_ORDER = {"high": 0, "medium": 1, "low": 2, "": 3}
 
@@ -113,10 +115,12 @@ def render_report(results: list[dict], since: str, until: str) -> str:
     sorted_results = sort_results(results)
 
     header = f"# Dapr Community Content \u2014 {since} to {until}\n\n"
-    table = render_summary_table(sorted_results)
+    platform_stats = build_stats(sorted_results)
+    stats_table = render_stats_table(platform_stats)
+    summary_table = render_summary_table(sorted_results)
     posts = "\n---\n\n".join(render_post(r) for r in sorted_results)
 
-    return f"{header}{table}\n\n{posts}\n"
+    return f"{header}{stats_table}\n\n{summary_table}\n\n{posts}\n"
 
 
 def main() -> None:

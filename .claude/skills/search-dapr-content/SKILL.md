@@ -101,26 +101,26 @@ cd community-search && uv run python search.py --auth linkedin
       **CRITICAL — Writing enrichment data back to JSON:**
       NEVER use the Write tool to write JSON files directly — post text often contains quotes,
       newlines, and special characters that will produce invalid JSON if not properly escaped.
-      ALWAYS use the `enrich.py` helper script which uses `json.dump` for correct escaping:
+      ALWAYS use the `enrich.py` helper script which uses `json.dump` for correct escaping.
+
+      Write the enrichment array to a temporary JSON file first (this is safe because enrichment
+      objects only contain short strings with no special characters), then pass it to `enrich.py`:
 
       ```
-      cd community-search && uv run python enrich.py <json_path> --data '[{"sentiment": "positive", "relevancy_score": "high", "summary": "..."}, ...]'
+      cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments_<platform>.json
       ```
 
-      The --data argument must be a JSON array with one object per post (same order as the file),
-      containing only the three enrichment fields. Alternatively, write the enrichment array to a
-      temporary file and use --data-file:
-
-      ```
-      cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments.json
-      ```
+      The --data-file argument must point to a JSON file containing an array with one object per
+      post (same order as the report file), each with only the three enrichment fields.
 
       If the file has more than 15 posts, use batched enrichment:
       - Split: cd community-search && uv run python batch_split.py <json_path> --batch-size 15
       - Launch one Agent subagent per batch in parallel to enrich each batch file.
       - Merge batches back: cd community-search && uv run python batch_merge.py --pattern "reports/<base>_batch_*.json" --output <json_path> --delete-batches
 
-   4. Report the JSON file path and post count when done.
+   4. Verify the enrichment by running:
+      cd community-search && uv run python verify.py <json_path>
+      Report the JSON file path and verification output when done.
    ```
 
    After all platform subagents complete, proceed to step 6 (merge) and step 7 (render).
@@ -133,16 +133,15 @@ cd community-search && uv run python search.py --auth linkedin
    - **CRITICAL — Writing enrichment data back to JSON:**
      NEVER use the Write tool to write JSON files directly — post text often contains quotes,
      newlines, and special characters that will produce invalid JSON if not properly escaped.
-     ALWAYS use the `enrich.py` helper script which uses `json.dump` for correct escaping:
+     ALWAYS use the `enrich.py` helper script which uses `json.dump` for correct escaping.
+
+     Write the enrichment array to a temporary JSON file first (this is safe because enrichment
+     objects only contain short strings with no special characters), then pass it to `enrich.py`:
      ```
-     cd community-search && uv run python enrich.py <json_path> --data '[{"sentiment": "positive", "relevancy_score": "high", "summary": "..."}, ...]'
+     cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments_<platform>.json
      ```
-     The --data argument must be a JSON array with one object per post (same order as the file),
-     containing only the three enrichment fields. Alternatively, write the enrichment array to a
-     temporary file and use --data-file:
-     ```
-     cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments.json
-     ```
+     The --data-file argument must point to a JSON file containing an array with one object per
+     post (same order as the report file), each with only the three enrichment fields.
 
    **For more than 15 posts**: Use **batched parallel enrichment with subagents**.
    - Split posts into batches using `batch_split.py`:
@@ -160,10 +159,11 @@ cd community-search && uv run python search.py --auth linkedin
        - low: not relevant to Dapr (slang, different topic, accidental keyword match).
      - "summary": one concise sentence summarizing the post (under 100 characters).
 
-     CRITICAL: NEVER use the Write tool to write JSON files — post text contains quotes and
-     special characters that will produce invalid JSON. Instead, use the enrich.py helper:
-     cd community-search && uv run python enrich.py <batch_file_path> --data '[{"sentiment": "...", "relevancy_score": "...", "summary": "..."}, ...]'
-     Or write enrichments to a temp file and use: --data-file /tmp/enrichments_batch_N.json
+     CRITICAL: NEVER use the Write tool to write JSON files with post text — it contains quotes and
+     special characters that will produce invalid JSON. Instead, write the enrichment array (which
+     only contains short safe strings) to a temp file, then use the enrich.py helper:
+     Write enrichments to /tmp/enrichments_batch_N.json, then run:
+     cd community-search && uv run python enrich.py <batch_file_path> --data-file /tmp/enrichments_batch_N.json
      ```
 
    - After all subagents complete, merge batch files back:
@@ -190,11 +190,23 @@ cd community-search && uv run python search.py --auth linkedin
    cd community-search && uv run python render.py <json_file_path> --output reports/YYYY-MM-DD-community-content.md --since YYYY-MM-DD --until YYYY-MM-DD
    ```
    This script handles all mechanical post-processing:
+   - Generates a **platform statistics table** as the first item in the report, showing the number of posts per platform with a breakdown by relevancy score (high, medium, low) and totals
    - Reorders posts by relevancy score (high first, then medium, then low; date descending within each tier)
    - Generates the summary table with internal anchor links
    - Writes the final Markdown file containing data from all platforms
 
-8. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics, relevancy score distribution).
+   The statistics table can also be generated standalone using `stats.py`:
+   ```
+   cd community-search && uv run python stats.py <json_file_path>
+   ```
+
+8. **Verify the final output** using `verify.py`:
+   ```
+   cd community-search && uv run python verify.py <final_json_file_path>
+   ```
+   This checks that all posts have been enriched and prints a summary.
+
+9. **Summarize the results**: Provide a brief overview of the content found (post count, platforms, notable authors or topics, relevancy score distribution).
 
 ## Enrichment Rules
 

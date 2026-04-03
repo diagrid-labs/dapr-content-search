@@ -359,9 +359,15 @@ def _parse_html(filepath: str, url_data: list[dict], since: date, until: date) -
 
     for i, item in enumerate(items):
         try:
-            # Author name: first <p> with the LinkedIn style variable
-            author_p = item.select_one('p[style*="--_2f26bb22"]')
-            author_name = author_p.get_text(strip=True) if author_p else "Unknown"
+            # Author name: the second <a> in the item is the author profile
+            # link, and its first <p> child contains the display name.
+            # (Avoid relying on hashed CSS variable names which rotate.)
+            author_name = "Unknown"
+            item_links = item.select("a")
+            if len(item_links) >= 2:
+                author_p = item_links[1].select_one("p")
+                if author_p:
+                    author_name = author_p.get_text(strip=True)
 
             # Timestamp: <p> containing time indicators
             time_text = ""
