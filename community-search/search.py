@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
 from platforms.bluesky import run_bluesky
-from platforms.x import run_x
 from platforms.linkedin import run_linkedin
 from platforms.reddit import run_reddit
 
@@ -31,10 +30,7 @@ async def auth_setup(platform: str) -> None:
     """Launch a headed browser for the user to log in and save session state."""
     from playwright.async_api import async_playwright
 
-    if platform == "x":
-        login_url = "https://x.com/login"
-        state_file = config.X_AUTH_STATE_FILE
-    elif platform == "linkedin":
+    if platform == "linkedin":
         login_url = "https://www.linkedin.com/login"
         state_file = config.LINKEDIN_AUTH_STATE_FILE
     else:
@@ -70,10 +66,13 @@ async def run_platform(name: str, since: date, until: date) -> list[dict]:
     """Run a single platform, catching errors so others can continue."""
     runners = {
         "bluesky": run_bluesky,
-        "x": run_x,
         "linkedin": run_linkedin,
         "reddit": run_reddit,
     }
+    if name == "x":
+        print("[x] X search now uses the x-mcp MCP server. "
+              "Use the search-dapr-content skill or call x-mcp tools directly.")
+        return []
     runner = runners.get(name)
     if not runner:
         print(f"Unknown platform: {name}")
@@ -108,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a single platform",
     )
     mode.add_argument(
-        "--auth", choices=["x", "linkedin"],
+        "--auth", choices=["linkedin"],
         help="Auth setup mode — launches a visible browser for login",
     )
 

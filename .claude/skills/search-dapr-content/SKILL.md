@@ -21,14 +21,16 @@ The user may provide:
 **Important platform notes:**
 - **Bluesky** uses a public API and works immediately — no setup or authentication needed.
 - **Reddit** uses the public JSON API and works immediately — no setup or authentication needed. Searches r/dotnet and r/csharp subreddits (configurable in `config.py`).
-- **X and LinkedIn** require browser-based authentication and Playwright browser binaries.
+- **X** uses the x-mcp MCP server (requires `TWITTER_USERNAME` and `TWITTER_PASSWORD` environment variables set before launching Claude Code, and Node.js/npm installed for npx).
+- **LinkedIn** requires browser-based authentication and Playwright browser binaries.
 
 ## Prerequisites
 
 Before the first run, ensure:
 1. `uv` is installed on the system.
 2. The virtual environment and dependencies are set up (see First-Time Setup below).
-3. For X or LinkedIn: Playwright Chromium is installed and authentication is completed.
+3. For X: `TWITTER_USERNAME` and `TWITTER_PASSWORD` environment variables are set, and Node.js/npm is installed (for the x-mcp MCP server).
+4. For LinkedIn: Playwright Chromium is installed and authentication is completed.
 
 ## First-Time Setup
 
@@ -38,18 +40,19 @@ Only run these steps if the `.venv` directory does not exist in `community-searc
 cd community-search && uv venv && uv pip install -e .
 ```
 
-For X or LinkedIn searches, also install the Playwright browser:
+For LinkedIn searches, also install the Playwright browser:
 
 ```
 cd community-search && uv run playwright install chromium
 ```
 
-Then authenticate by telling the user to run these commands themselves (they require an interactive browser that Claude cannot operate):
+Then authenticate by telling the user to run this command themselves (it requires an interactive browser that Claude cannot operate):
 
 ```
-cd community-search && uv run python search.py --auth x
 cd community-search && uv run python search.py --auth linkedin
 ```
+
+For X searches, the x-mcp MCP server handles authentication automatically via environment variables. Ensure `TWITTER_USERNAME` and `TWITTER_PASSWORD` are set in the shell before launching Claude Code.
 
 ## Execution Steps
 
@@ -64,7 +67,7 @@ cd community-search && uv run python search.py --auth linkedin
 
 4. **Run search + enrichment** — the approach depends on how many platforms are requested:
 
-   ### Single platform
+   ### Single platform (non-X)
 
    Run the search directly, then enrich in the main conversation:
    ```
@@ -72,11 +75,38 @@ cd community-search && uv run python search.py --auth linkedin
    ```
    Then proceed to step 5 (enrich), step 6 (merge — skipped for single platform), and step 7 (render).
 
+   ### Single platform (X only)
+
+   X search uses the x-mcp MCP server instead of the Python script. Run the search in the main conversation:
+
+   1. **Build the search query** for each keyword in `config.py` (`SEARCH_KEYWORDS`):
+      ```
+      cd community-search && uv run python platforms/x_mcp_normalize.py --build-query --keyword Dapr --since YYYY-MM-DD --until YYYY-MM-DD
+      ```
+
+   2. **Call the `search_twitter` MCP tool** with:
+      - `query`: the query string from step 1
+      - `product`: "Latest"
+      - `count`: 100
+
+   3. **Paginate**: If the response includes a `cursor`, call `search_twitter` again with that cursor. Repeat until no cursor is returned or 5 total calls have been made.
+
+   4. **Save raw results**: Collect all posts from all pages into a single JSON array and write it to `/tmp/x_mcp_raw.json`.
+
+   5. **Normalize and filter**:
+      ```
+      cd community-search && uv run python platforms/x_mcp_normalize.py --input /tmp/x_mcp_raw.json --output reports/YYYY-MM-DD-x-community-content.json --since YYYY-MM-DD --until YYYY-MM-DD --verbose
+      ```
+
+   6. Proceed to step 5 (enrich), step 6 (merge — skipped for single platform), and step 7 (render).
+
    ### Multiple platforms (parallel pipeline)
 
-   Launch one **Agent subagent per platform in parallel** (use a single message with multiple Agent tool calls). Each subagent handles the full search-and-enrich pipeline for its platform independently, so fast platforms (e.g., Bluesky) complete without waiting for slower ones (e.g., LinkedIn).
+   Launch one **Agent subagent per non-X platform in parallel** (use a single message with multiple Agent tool calls). Each subagent handles the full search-and-enrich pipeline for its platform independently, so fast platforms (e.g., Bluesky) complete without waiting for slower ones (e.g., LinkedIn).
 
-   Each subagent prompt should be:
+   **For X**: Run the X search in the main conversation first (using the x-mcp MCP tool as described in "Single platform (X only)" steps 1-5 above), then launch an enrichment-only subagent for X in parallel with the other platform subagents.
+
+   Each **non-X platform subagent** prompt should be:
 
    ```
    You are enriching Dapr community search results for the <PLATFORM> platform.
@@ -120,6 +150,37 @@ cd community-search && uv run python search.py --auth linkedin
       - Merge batches back: cd community-search && uv run python batch_merge.py --pattern "reports/<base>_batch_*.json" --output <json_path> --delete-batches
 
    4. Verify the enrichment by running:
+      cd community-search && uv run python verify.py <json_path>
+      Report the JSON file path and verification output when done.
+   ```
+
+   The **X enrichment-only subagent** prompt should be:
+
+   ```
+   You are enriching Dapr community search results for the X platform.
+   The search has already been completed and the JSON file is at reports/YYYY-MM-DD-x-community-content.json.
+
+   1. Read the JSON file and enrich each post with:
+      - "sentiment": one of "positive", "neutral", or "negative" based on tone.
+      - "relevancy_score": one of "high", "medium", or "low":
+        - high: clearly about Dapr (distributed application runtime) or Dapr Agents (Python library for agentic AI).
+        - medium: mentions Dapr in passing or discusses related distributed systems topics alongside Dapr.
+        - low: not relevant to Dapr (slang, different topic, accidental keyword match).
+      - "summary": one concise sentence summarizing the post (under 100 characters).
+
+      **CRITICAL — Writing enrichment data back to JSON:**
+      NEVER use the Write tool to write JSON files directly.
+      ALWAYS use the `enrich.py` helper script:
+
+      Write the enrichment array to /tmp/enrichments_x.json, then run:
+      cd community-search && uv run python enrich.py <json_path> --data-file /tmp/enrichments_x.json
+
+      If the file has more than 15 posts, use batched enrichment:
+      - Split: cd community-search && uv run python batch_split.py <json_path> --batch-size 15
+      - Launch one Agent subagent per batch in parallel to enrich each batch file.
+      - Merge batches back: cd community-search && uv run python batch_merge.py --pattern "reports/<base>_batch_*.json" --output <json_path> --delete-batches
+
+   2. Verify the enrichment by running:
       cd community-search && uv run python verify.py <json_path>
       Report the JSON file path and verification output when done.
    ```
@@ -178,9 +239,10 @@ cd community-search && uv run python search.py --auth linkedin
    ```
    Note: Do NOT use `--delete-batches` — the individual platform JSON files must be preserved.
 
-   Check the subagent results for auth errors. If a platform failed due to missing auth state or expired session, inform the user they need to authenticate by running:
+   Check the subagent results for auth errors:
+   - If X search failed (e.g., x-mcp returned an error), inform the user to check their `TWITTER_USERNAME` and `TWITTER_PASSWORD` environment variables.
+   - If LinkedIn failed due to missing auth state or expired session, inform the user to authenticate by running:
    ```
-   ! cd community-search && uv run python search.py --auth x
    ! cd community-search && uv run python search.py --auth linkedin
    ```
 

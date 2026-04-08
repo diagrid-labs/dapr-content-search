@@ -36,8 +36,10 @@ EXCLUSIONS: dict[str, list[str]] = {
 
 X_LANGUAGE_FILTER: str = "en"          # appended as lang:en to every X query
 X_EXCLUDE_RETWEETS: bool = True        # if True, append -filter:retweets
-X_MAX_SCROLL_ATTEMPTS: int = 15        # how many infinite-scroll iterations
-X_SCROLL_PAUSE_SECONDS: float = 2.5    # seconds to wait after each scroll
+
+# X MCP settings (x-mcp server replaces Playwright browser scraping)
+X_MCP_MAX_PAGES: int = 5              # max pagination calls (100 posts per page)
+X_MCP_PRODUCT: str = "Latest"         # "Top" or "Latest" sort order
 
 LINKEDIN_MAX_SCROLL_ATTEMPTS: int = 10
 LINKEDIN_SCROLL_PAUSE_SECONDS: float = 3.0
@@ -55,5 +57,4 @@ REDDIT_PAGE_LIMIT: int = 100          # posts per page (API max is 100)
 # Auth state file paths
 # ---------------------------------------------------------------------------
 AUTH_DIR: str = "auth"
-X_AUTH_STATE_FILE: str = f"{AUTH_DIR}/x_state.json"
 LINKEDIN_AUTH_STATE_FILE: str = f"{AUTH_DIR}/linkedin_state.json"

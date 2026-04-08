@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "x-mcp": {
+      "command": "npx",
+      "args": ["-y", "@barresider/x-mcp"],
+      "env": {
+        "TWITTER_USERNAME": "${TWITTER_USERNAME}",
+        "TWITTER_PASSWORD": "${TWITTER_PASSWORD}"
+      }
+    }
+  }
+}
