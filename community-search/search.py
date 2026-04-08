@@ -18,6 +18,7 @@ import config
 from platforms.bluesky import run_bluesky
 from platforms.x import run_x
 from platforms.linkedin import run_linkedin
+from platforms.reddit import run_reddit
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,10 @@ async def auth_setup(platform: str) -> None:
     os.makedirs(config.AUTH_DIR, exist_ok=True)
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)
-        context = await browser.new_context()
+        browser = await pw.chromium.launch(headless=False, channel="chrome")
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
         page = await context.new_page()
 
         await page.goto(login_url)
@@ -69,6 +72,7 @@ async def run_platform(name: str, since: date, until: date) -> list[dict]:
         "bluesky": run_bluesky,
         "x": run_x,
         "linkedin": run_linkedin,
+        "reddit": run_reddit,
     }
     runner = runners.get(name)
     if not runner:
@@ -100,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run all three platforms and merge results",
     )
     mode.add_argument(
-        "--platform", choices=["x", "linkedin", "bluesky"],
+        "--platform", choices=["x", "linkedin", "bluesky", "reddit"],
         help="Run a single platform",
     )
     mode.add_argument(
@@ -165,7 +169,7 @@ async def main() -> None:
 
     # Determine which platforms to run
     if args.all:
-        platforms = ["x", "linkedin", "bluesky"]
+        platforms = ["x", "linkedin", "bluesky", "reddit"]
     else:
         platforms = [args.platform]
 

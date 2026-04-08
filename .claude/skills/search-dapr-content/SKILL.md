@@ -1,25 +1,26 @@
 ---
 name: search-dapr-content
-description: Search X, LinkedIn, and Bluesky for Dapr community content using the community-search Python application.
+description: Search X, LinkedIn, Bluesky, and Reddit for Dapr community content using the community-search Python application.
 user-invocable: true
 ---
 
 # Search Dapr Content
 
-Search social media platforms (X, LinkedIn, Bluesky) for Dapr-related community content. The app searches for keywords defined in `community-search/config.py` (e.g., `Dapr`, `Dapr Workflow`, `Dapr Agents`).
+Search social media platforms (X, LinkedIn, Bluesky, Reddit) for Dapr-related community content. The app searches for keywords defined in `community-search/config.py` (e.g., `Dapr`, `Dapr Workflow`, `Dapr Agents`).
 
 **False positive filtering**: The scrapers automatically reject posts where "dapr" only appears as a substring inside another word (e.g., the French word "d'apr&egrave;s"). The `has_dapr_keyword()` function in `platforms/__init__.py` enforces that "dapr" must appear as a standalone keyword, not surrounded by letters or apostrophes.
 
 ## How to Use
 
 The user may provide:
-- **Platform**: `x`, `linkedin`, `bluesky`, or `all`. Default: `all`.
+- **Platform**: `x`, `linkedin`, `bluesky`, `reddit`, or `all`. Default: `all`.
 - **Date range**: A `--since` and/or `--until` date. Default: last 30 days from today.
 - **Output file**: A custom output path. Default: `reports/YYYY-MM-DD-community-content.md` (in the repo root).
 - **Authentication**: The user may ask to authenticate for X or LinkedIn. This requires an interactive browser and must be run by the user themselves.
 
 **Important platform notes:**
 - **Bluesky** uses a public API and works immediately — no setup or authentication needed.
+- **Reddit** uses the public JSON API and works immediately — no setup or authentication needed. Searches r/dotnet and r/csharp subreddits (configurable in `config.py`).
 - **X and LinkedIn** require browser-based authentication and Playwright browser binaries.
 
 ## Prerequisites
@@ -228,7 +229,7 @@ The final Markdown format for each post (produced by `render.py`) is:
 
 ### Platform
 
-[x|linkedin|bluesky]
+[x|linkedin|bluesky|reddit]
 
 ### Author
 

@@ -24,9 +24,10 @@ SEARCH_KEYWORDS: list[str] = [
 # X supports native query negation (e.g. -gamer). For LinkedIn and Bluesky,
 # exclusions are applied as a post-processing filter on the result text.
 EXCLUSIONS: dict[str, list[str]] = {
-    "x": ["gamer", "gaming", "stream", "twitch", "streamer"],
+    "x": ["gamer", "gaming", "stream", "twitch"],
     "linkedin": ["gamer", "gaming", "stream", "twitch"],
     "bluesky": ["gamer", "gaming", "stream", "twitch"],
+    "reddit": ["gamer", "gaming", "stream", "twitch"],
 }
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,10 @@ BLUESKY_API_BASE: str = "https://api.bsky.app/xrpc"
 BLUESKY_SEARCH_ENDPOINT: str = "app.bsky.feed.searchPosts"
 BLUESKY_MAX_PAGES: int = 5             # maximum cursor-paginated pages to fetch
 BLUESKY_PAGE_LIMIT: int = 25           # posts per page (API max is 25)
+
+REDDIT_SUBREDDITS: list[str] = ["dotnet", "csharp", "dApr", "microservices"]
+REDDIT_MAX_PAGES: int = 5             # maximum pages to fetch per subreddit per keyword
+REDDIT_PAGE_LIMIT: int = 100          # posts per page (API max is 100)
 
 # ---------------------------------------------------------------------------
 # Auth state file paths
